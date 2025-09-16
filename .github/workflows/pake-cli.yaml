@@ -43,6 +43,26 @@ on:
         required: false
         type: boolean
         default: false
+      enable_drag_drop:
+        description: "_"
+        required: false
+        type: boolean
+        default: true
+      keep_binary:
+        description: "-"
+        required: false
+        type: boolean
+        default: true
+      show_tray:
+        description: "-"
+        required: false
+        type: boolean
+        default: true
+      keep_on_close:
+        description: "-"
+        required: false
+        type: boolean
+        default: true
       multi_arch:
         description: "MultiArch, MacOS only, Optional"
         required: false
@@ -129,10 +149,10 @@ jobs:
           PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           PKG_CONFIG_ALLOW_SYSTEM_LIBS: 1
           PKG_CONFIG_ALLOW_SYSTEM_CFLAGS: 1
-          ENABLE_DRAG_DROP: 1
-          KEEP_BINARY: 1
-          SHOW_SYSTEM_TRAY: 1
-          HIDE_ON_CLOSE: 1
+          ENABLE_DRAG_DROP: ${{ inputs.enable_drag_drop }}
+          KEEP_BINARY: ${{ inputs.keep_binary }}
+          SHOW_SYSTEM_TRAY: ${{ inputs.show_tray }}
+          HIDE_ON_CLOSE: ${{ inputs.keep_on_close }}
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
