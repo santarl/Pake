@@ -132,6 +132,22 @@ class PakeBuildManager {
       params.push("--show-system-tray");
     }
 
+    if (process.env.ENABLE_DRAG_DROP === "true") {
+      params.push("--enable-drag-drop");
+    }
+
+    if (process.env.KEEP_BINARY === "true") {
+      params.push("--keep-binary");
+    }
+
+    if (process.env.SHOW_SYSTEM_TRAY === "true") {
+      params.push("--show-system-tray");
+    }
+
+    if (process.env.HIDE_ON_CLOSE === "true") {
+      params.push("--hide-on-close");
+    }
+
     // Icon handling
     if (process.env.ICON?.trim()) {
       params.push("--icon", process.env.ICON);
