@@ -1,0 +1,154 @@
+name: Build WhatsAppake Desktop Apps
+
+on:
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "22"
+  APP_URL: "https://web.whatsapp.com"
+  BUCKET_REPO: "santarl/scoop_bucket"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      max-parallel: 1 # serialize so both jobs don't race pushing to scoop_bucket
+      matrix:
+        app:
+          - name: WhatsAppake1
+            manifest: whatsappake1.json
+          - name: WhatsAppake2
+            manifest: whatsappake2.json
+    name: Build ${{ matrix.app.name }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Pake fork
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust cache restore
+        uses: actions/cache/restore@v4.2.0
+        id: cache_store
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-pake-${{ matrix.app.name }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Pake CLI
+        run: npm install -g pake-cli
+
+      - name: Set version
+        id: version
+        shell: pwsh
+        run: |
+          $date = Get-Date -Format "yyyy.MM.dd"
+          $version = "$date.${{ github.run_number }}"
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build App
+        timeout-minutes: 25
+        shell: pwsh
+        run: |
+          pake "${{ env.APP_URL }}" `
+            --name "${{ matrix.app.name }}" `
+            --width 1000 `
+            --height 700 `
+            --min-width 600 `
+            --min-height 500 `
+            --app-version "${{ steps.version.outputs.version }}" `
+            --show-system-tray `
+            --start-to-tray `
+            --hide-on-close true `
+            --keep-binary
+
+      - name: Compute SHA256 hash
+        id: hash
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.app.name }}.exe").Hash.ToLower()
+          echo "sha256=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Upload standalone EXE (build artifact)
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.app.name }}-Windows-exe
+          path: ${{ matrix.app.name }}.exe
+          retention-days: 7
+
+      - name: Publish GitHub Release (Pake fork)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.app.name }}-v${{ steps.version.outputs.version }}
+          name: ${{ matrix.app.name }} v${{ steps.version.outputs.version }}
+          make_latest: false
+          files: ${{ matrix.app.name }}.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout scoop_bucket
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BUCKET_REPO }}
+          token: ${{ secrets.SCOOP_BUCKET_PAT }}
+          path: scoop-bucket
+
+      - name: Write Scoop manifest
+        shell: pwsh
+        run: |
+          $manifest = [ordered]@{
+              '$schema'   = "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json"
+              version     = "${{ steps.version.outputs.version }}"
+              description = "WhatsApp Web packaged as a native Windows desktop app (via Pake)"
+              homepage    = "https://github.com/${{ github.repository }}"
+              license     = "GPL-3.0-only"
+              url         = "https://github.com/${{ github.repository }}/releases/download/${{ matrix.app.name }}-v${{ steps.version.outputs.version }}/${{ matrix.app.name }}.exe"
+              hash        = "${{ steps.hash.outputs.sha256 }}"
+              bin         = "${{ matrix.app.name }}.exe"
+              shortcuts   = @(
+                  ,@("${{ matrix.app.name }}.exe", "${{ matrix.app.name }}")
+              )
+              persist     = @()
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path "scoop-bucket/bucket/${{ matrix.app.manifest }}" -Encoding utf8
+
+      - name: Commit manifest to scoop_bucket
+        shell: bash
+        working-directory: scoop-bucket
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "bucket/${{ matrix.app.manifest }}"
+          if git diff --staged --quiet; then
+            echo "No manifest changes to commit"
+          else
+            git commit -m "chore: update ${{ matrix.app.name }} to v${{ steps.version.outputs.version }}"
+            git push
+          fi
+
+      - name: Rust cache store
+        uses: actions/cache/save@v4.2.0
+        if: steps.cache_store.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-cargo-pake-${{ matrix.app.name }}-${{ hashFiles('**/Cargo.lock') }}
