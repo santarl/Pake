@@ -57,8 +57,9 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $date = Get-Date -Format "yyyy.MM.dd"
-          $version = "$date.${{ github.run_number }}"
+          # Tauri requires strict MAJOR.MINOR.PATCH semver - no date-based 4th segment.
+          # Run number as the patch digit keeps it unique and monotonically increasing per run.
+          $version = "1.0.${{ github.run_number }}"
           echo "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Build App
