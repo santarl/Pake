@@ -7,6 +7,9 @@ env:
   NODE_VERSION: "22"
   APP_URL: "https://web.whatsapp.com"
   BUCKET_REPO: "santarl/scoop_bucket"
+  # Absolute so the Rust build output lands in the workspace and can be cached
+  # (a global npm install would otherwise build inside node_modules).
+  CARGO_TARGET_DIR: ${{ github.workspace }}/pake-target
 
 permissions:
   contents: write
@@ -25,7 +28,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout Pake fork
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -38,6 +41,45 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install Pake CLI (newest fork build, upstream fallback)
+        id: pake
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Newest release in this repo that carries a pake-cli.tgz asset. Releases without
+          # one (WhatsAppake app releases, etc.) are skipped. If none exists or anything
+          # fails, fall back to upstream pake-cli instead of failing the build.
+          $url = $null
+          try {
+            $rows = @(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate --jq '.[] | select(.draft == false) | . as $r | $r.assets[] | select(.name == "pake-cli.tgz") | "\($r.created_at)\t\(.browser_download_url)"')
+            if ($LASTEXITCODE -ne 0) { throw "gh api exited with $LASTEXITCODE" }
+            $latest = $rows | Where-Object { $_ } | Sort-Object -Descending | Select-Object -First 1
+            if ($latest) { $url = ($latest -split "`t")[1] }
+          } catch {
+            Write-Host "::warning::Could not list releases: $_"
+          }
+
+          $source = "upstream npm (pake-cli)"
+          if ($url) {
+            Write-Host "Installing fork pake-cli from $url"
+            npm install -g $url
+            if ($LASTEXITCODE -eq 0) { $source = $url }
+            else { Write-Host "::warning::Fork pake-cli install failed, falling back to upstream"; $url = $null }
+          } else {
+            Write-Host "::warning::No fork pake-cli release found, falling back to upstream pake-cli"
+          }
+          if (-not $url) {
+            npm install -g pake-cli
+            if ($LASTEXITCODE -ne 0) { throw "Installing upstream pake-cli failed" }
+          }
+
+          # Cache key follows the Cargo.lock of whichever Pake was actually installed.
+          $lock = Join-Path (npm root -g) "pake-cli/src-tauri/Cargo.lock"
+          $hash = if (Test-Path $lock) { (Get-FileHash -Algorithm SHA256 $lock).Hash.ToLower() } else { "nolock" }
+          echo "lock_hash=$hash" >> $env:GITHUB_OUTPUT
+          echo "Pake source: $source" >> $env:GITHUB_STEP_SUMMARY
+
       - name: Rust cache restore
         uses: actions/cache/restore@v4.2.0
         id: cache_store
@@ -47,11 +89,8 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            src-tauri/target/
-          key: ${{ runner.os }}-cargo-pake-${{ matrix.app.name }}-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install Pake CLI
-        run: npm install -g pake-cli
+            pake-target/
+          key: ${{ runner.os }}-cargo-pake-${{ steps.pake.outputs.lock_hash }}
 
       - name: Set version
         id: version
@@ -151,5 +190,5 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            src-tauri/target/
-          key: ${{ runner.os }}-cargo-pake-${{ matrix.app.name }}-${{ hashFiles('**/Cargo.lock') }}
+            pake-target/
+          key: ${{ runner.os }}-cargo-pake-${{ steps.pake.outputs.lock_hash }}

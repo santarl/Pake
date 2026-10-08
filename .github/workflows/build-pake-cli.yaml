@@ -1,0 +1,86 @@
+name: Build Pake CLI (fork)
+
+# Builds the fork's pake-cli once and publishes it as an installable tarball
+# (`pake-cli.tgz`) on its own release, tagged `pake-cli-v<version>-<shortsha>`.
+# App workflows (WhatsAppake, ...) look for the newest release carrying that asset
+# and install it instead of the upstream npm package, so they never rebuild Pake.
+# Unrelated releases (app builds, etc.) are ignored; only the last KEEP are retained.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bin/**"
+      - "src-tauri/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "rollup.config.js"
+      - "tsconfig.json"
+      - ".github/workflows/build-pake-cli.yaml"
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "22"
+  KEEP: "5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-pake-cli
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and publish pake-cli tarball
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CLI
+        run: pnpm run cli:build
+
+      - name: Pack tarball
+        run: |
+          npm pack --ignore-scripts
+          mv pake-cli-*.tgz pake-cli.tgz
+          ls -lh pake-cli.tgz
+          tar -tzf pake-cli.tgz | grep -E "package/(dist/cli.js|src-tauri/Cargo.lock)"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="pake-cli-v${VERSION}-${GITHUB_SHA::7}"
+          # Re-running on the same commit replaces the previous release.
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh release create "$TAG" pake-cli.tgz \
+            --title "pake-cli ${VERSION} (fork build ${GITHUB_SHA::7})" \
+            --notes "Built from ${GITHUB_SHA} (run ${GITHUB_RUN_ID}). Install: npm install -g https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/pake-cli.tgz" \
+            --target "$GITHUB_SHA" \
+            --prerelease --latest=false
+
+      - name: Prune old pake-cli releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 200 --json tagName,createdAt \
+            --jq "[.[] | select(.tagName | startswith(\"pake-cli-\"))] | sort_by(.createdAt) | reverse | .[${KEEP}:] | .[].tagName" |
+          while read -r tag; do
+            echo "Deleting old release $tag"
+            gh release delete "$tag" --cleanup-tag --yes
+          done
