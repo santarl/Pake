@@ -272,6 +272,10 @@ pub fn hide_all_app_windows(app: &AppHandle) {
 
 /// Show every webview window, reassert icons, and focus the main window.
 pub fn show_all_app_windows(app: &AppHandle, init_fullscreen: bool) {
+    // A frozen webview is suspended and invisible; resume it before it is shown.
+    #[cfg(windows)]
+    crate::app::freeze::thaw_if_frozen(app);
+
     let windows = app.webview_windows();
     for window in windows.values() {
         let _ = window.unminimize();

@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use crate::app::freeze;
 use crate::app::window::{
     hide_all_app_windows, open_additional_window_safe, show_all_app_windows, toggle_all_app_windows,
 };
@@ -5,6 +7,8 @@ use crate::cancel_startup_reveal;
 use std::str::FromStr;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use tauri::menu::CheckMenuItemBuilder;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -34,15 +38,25 @@ pub fn set_system_tray(
     let show_app = MenuItemBuilder::with_id("show_app", "Show").build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
-    let menu = if allow_multi_window {
-        MenuBuilder::new(app)
-            .items(&[&new_window, &hide_app, &show_app, &quit])
-            .build()?
-    } else {
-        MenuBuilder::new(app)
-            .items(&[&hide_app, &show_app, &quit])
-            .build()?
-    };
+    // Freeze suspends the webview via WebView2 (Windows only); the checkbox is
+    // kept in `FreezeState` so thawing from elsewhere can uncheck it.
+    #[cfg(windows)]
+    let freeze_item = CheckMenuItemBuilder::with_id(freeze::FREEZE_MENU_ID, "Freeze")
+        .checked(false)
+        .build(app)?;
+    #[cfg(windows)]
+    freeze::register_item(app, freeze_item.clone());
+
+    let mut menu_builder = MenuBuilder::new(app);
+    if allow_multi_window {
+        menu_builder = menu_builder.item(&new_window);
+    }
+    menu_builder = menu_builder.item(&hide_app).item(&show_app);
+    #[cfg(windows)]
+    {
+        menu_builder = menu_builder.item(&freeze_item);
+    }
+    let menu = menu_builder.item(&quit).build()?;
 
     app.app_handle().remove_tray_by_id("pake-tray");
 
@@ -62,6 +76,13 @@ pub fn set_system_tray(
             "show_app" => {
                 cancel_startup_reveal(&menu_revealed);
                 show_all_app_windows(app, _init_fullscreen);
+            }
+            #[cfg(windows)]
+            freeze::FREEZE_MENU_ID => {
+                // Freezing hides the windows, so the user has taken control of
+                // visibility: drop any pending startup reveal.
+                cancel_startup_reveal(&menu_revealed);
+                freeze::on_tray_toggle(app);
             }
             "quit" => {
                 let flags = if _init_fullscreen {

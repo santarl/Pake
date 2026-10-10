@@ -1,6 +1,8 @@
 #[cfg(target_os = "macos")]
 pub mod cert;
 pub mod config;
+#[cfg(windows)]
+pub mod freeze;
 pub mod invoke;
 #[cfg(target_os = "macos")]
 pub mod menu;

@@ -238,6 +238,9 @@ pub fn run_app() {
                     open_additional_window_safe(app);
                 } else if let Some(window) = app.get_webview_window("pake") {
                     cancel_startup_reveal(&instance_revealed);
+                    // Launching the app again while it is frozen should wake it.
+                    #[cfg(windows)]
+                    app::freeze::thaw_if_frozen(app);
                     let _ = window.unminimize();
                     let _ = window.show();
                     reapply_window_icon(&window);
@@ -307,6 +310,8 @@ pub fn run_app() {
                 pake_config.clone(),
                 tauri_config.clone(),
             ));
+            #[cfg(windows)]
+            app.manage(app::freeze::FreezeState::default());
 
             // --- Menu Construction Start ---
             #[cfg(target_os = "macos")]
