@@ -1,0 +1,61 @@
+/*
+ * WhatsAppake: phone-style layout for narrow windows.
+ *
+ * WhatsApp Web has no mobile layout of its own. Below the breakpoint this shows
+ * one pane at a time, like the phone app:
+ *   - no chat open -> the chat list, full width
+ *   - a chat open  -> the conversation, full width (press Esc to go back)
+ * The icon rail (Chats, Status, Channels, Communities, Settings) is hidden too;
+ * widen the window past the breakpoint to get it back.
+ *
+ * The breakpoint is the 720px in the @media line below. It cannot use a CSS
+ * variable, so change it there.
+ *
+ * Selectors follow the current WhatsApp Web markup: div.two (app shell),
+ * header[data-testid="chatlist-header"] (icon rail), #side (chat list),
+ * #main (open conversation, only present while a chat is open) and the
+ * --navbar-width variable (space reserved for the rail). WhatsApp changes its
+ * markup now and then; if this stops working, those are the first things to check.
+ *
+ * Style rules only. Do not add scripts that change WhatsApp's DOM from here:
+ * its own observers can freeze the app on the loading screen if the DOM is
+ * mutated while it loads.
+ */
+@media (max-width: 720px) {
+  /* WhatsApp locks a minimum width on its layout; release it so the app can
+     follow the window down to the minimum set in the workflow. */
+  html,
+  body,
+  #app,
+  div:has(> div.two),
+  div.two {
+    min-width: 0 !important;
+  }
+  html,
+  body {
+    overflow-x: hidden !important;
+  }
+
+  /* The rail's space is reserved through this variable on :root. */
+  :root {
+    --navbar-width: 0px !important;
+  }
+  div.two > header[data-testid="chatlist-header"] {
+    display: none !important;
+  }
+
+  /* A chat is open: conversation only. */
+  div.two:has(#main) > div:has(> #side) {
+    display: none !important;
+  }
+
+  /* No chat open: chat list only, full width. */
+  div.two:not(:has(#main)) > div:has(> #side) {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  div.two:not(:has(#main)) > :not(header):not([data-testid^="drawer"]):not(:has(> #side)) {
+    display: none !important;
+  }
+}

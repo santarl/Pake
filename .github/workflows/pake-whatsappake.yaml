@@ -109,8 +109,9 @@ jobs:
             --name "${{ matrix.app.name }}" `
             --width 1000 `
             --height 700 `
-            --min-width 600 `
-            --min-height 500 `
+            --min-width 320 `
+            --min-height 300 `
+            --inject ./inject/whatsappake.css `
             --app-version "${{ steps.version.outputs.version }}" `
             --show-system-tray `
             --start-to-tray `
