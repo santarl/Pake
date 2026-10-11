@@ -110,6 +110,12 @@ pub fn set_system_tray(
                     cancel_startup_reveal(&click_revealed);
                     toggle_all_app_windows(tray.app_handle(), _init_fullscreen);
                 }
+                // Middle-click toggles Freeze (Windows only).
+                #[cfg(windows)]
+                if button == MouseButton::Middle && button_state == MouseButtonState::Up {
+                    cancel_startup_reveal(&click_revealed);
+                    freeze::toggle(tray.app_handle());
+                }
             }
         });
 
@@ -121,6 +127,9 @@ pub fn set_system_tray(
             .or_else(|| app.default_window_icon().cloned())
     };
 
+    #[cfg(windows)]
+    let frozen_base_icon = resolved_icon.clone();
+
     if let Some(icon) = resolved_icon {
         tray_builder = tray_builder.icon(icon);
     } else {
@@ -128,6 +137,10 @@ pub fn set_system_tray(
     }
 
     let tray = tray_builder.build(app)?;
+    #[cfg(windows)]
+    if let Some(icon) = &frozen_base_icon {
+        freeze::register_tray(app, &tray, icon);
+    }
 
     tray.set_icon_as_template(false)?;
     Ok(())
