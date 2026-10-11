@@ -55,7 +55,8 @@
     width: 100% !important;
     max-width: 100% !important;
   }
-  div.two:not(:has(#main)) > :not(header):not([data-testid^="drawer"]):not(:has(> #side)) {
+  div.two:not(:has(#main))
+    > :not(header):not([data-testid^="drawer"]):not(:has(> #side)) {
     display: none !important;
   }
 }
