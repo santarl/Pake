@@ -1,0 +1,176 @@
+name: Build WhatsAppake Linux Packages
+
+on:
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "22"
+  APP_URL: "https://web.whatsapp.com"
+  # Absolute so the Rust build output lands in the workspace and can be cached
+  # (a global npm install would otherwise build inside node_modules).
+  CARGO_TARGET_DIR: ${{ github.workspace }}/pake-target
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      # One at a time so the second app reuses the dependency cache the first one saves.
+      max-parallel: 1
+      matrix:
+        app: [WhatsAppake1, WhatsAppake2]
+    name: Build ${{ matrix.app }} (Linux)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          # Same list as the repo's setup-env action, plus the two tools the
+          # Arch (zst) packager needs: ar (binutils) and bsdtar (libarchive-tools).
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev \
+            build-essential curl wget file libxdo-dev libssl-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev gnome-video-effects \
+            libglib2.0-dev libgirepository1.0-dev pkg-config \
+            binutils libarchive-tools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Pake CLI (newest fork build, upstream fallback)
+        id: pake
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Newest release in this repo that carries a pake-cli.tgz asset. Releases without
+          # one (app releases, etc.) are skipped. If none exists or anything fails, fall
+          # back to upstream pake-cli instead of failing the build.
+          $url = $null
+          try {
+            $rows = @(gh api "repos/${{ github.repository }}/releases?per_page=100" --paginate --jq '.[] | select(.draft == false) | . as $r | $r.assets[] | select(.name == "pake-cli.tgz") | "\($r.created_at)\t\(.browser_download_url)"')
+            if ($LASTEXITCODE -ne 0) { throw "gh api exited with $LASTEXITCODE" }
+            $latest = $rows | Where-Object { $_ } | Sort-Object -Descending | Select-Object -First 1
+            if ($latest) { $url = ($latest -split "`t")[1] }
+          } catch {
+            Write-Host "::warning::Could not list releases: $_"
+          }
+
+          $source = "upstream npm (pake-cli)"
+          if ($url) {
+            Write-Host "Installing fork pake-cli from $url"
+            npm install -g $url
+            if ($LASTEXITCODE -eq 0) { $source = $url }
+            else { Write-Host "::warning::Fork pake-cli install failed, falling back to upstream"; $url = $null }
+          } else {
+            Write-Host "::warning::No fork pake-cli release found, falling back to upstream pake-cli"
+          }
+          if (-not $url) {
+            npm install -g pake-cli
+            if ($LASTEXITCODE -ne 0) { throw "Installing upstream pake-cli failed" }
+          }
+
+          # Cache key follows the Cargo.lock of whichever Pake was actually installed.
+          $lock = Join-Path (npm root -g) "pake-cli/src-tauri/Cargo.lock"
+          $hash = if (Test-Path $lock) { (Get-FileHash -Algorithm SHA256 $lock).Hash.ToLower() } else { "nolock" }
+          echo "lock_hash=$hash" >> $env:GITHUB_OUTPUT
+          echo "Pake source: $source" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Rust cache restore
+        uses: actions/cache/restore@v4.2.0
+        id: cache_store
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            pake-target/
+          key: ${{ runner.os }}-cargo-pake-${{ steps.pake.outputs.lock_hash }}
+
+      - name: Set version
+        id: version
+        run: |
+          # Tauri requires strict MAJOR.MINOR.PATCH semver. The run number is the patch
+          # digit, so each build is unique and pacman sees it as an upgrade.
+          echo "version=1.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build App
+        timeout-minutes: 30
+        run: |
+          # --targets zst builds a native Arch package (.pkg.tar.zst); add deb or
+          # appimage to the list for other distros, e.g. --targets zst,deb
+          pake "${APP_URL}" \
+            --name "${{ matrix.app }}" \
+            --width 1000 \
+            --height 700 \
+            --min-width 320 \
+            --min-height 300 \
+            --app-version "${{ steps.version.outputs.version }}" \
+            --show-system-tray \
+            --start-to-tray \
+            --hide-on-close true \
+            --inject ./inject/whatsappake.css \
+            --targets zst
+
+      - name: Collect package and checksum
+        id: package
+        run: |
+          shopt -s nullglob
+          files=( "${{ matrix.app }}"-*.pkg.tar.zst )
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one ${{ matrix.app }}-*.pkg.tar.zst, found ${#files[@]}"
+            ls -la
+            exit 1
+          fi
+          pkg="${files[0]}"
+          sha256sum "$pkg" > "$pkg.sha256"
+          cat "$pkg.sha256"
+          echo "file=$pkg" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release (Pake fork)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ matrix.app }}-linux-v${{ steps.version.outputs.version }}
+          name: ${{ matrix.app }} (Linux) v${{ steps.version.outputs.version }}
+          make_latest: false
+          files: |
+            ${{ steps.package.outputs.file }}
+            ${{ steps.package.outputs.file }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add install command to the summary
+        run: |
+          {
+            echo "### ${{ matrix.app }} (Linux) v${{ steps.version.outputs.version }}"
+            echo
+            echo 'Arch / CachyOS:'
+            echo '```'
+            echo "sudo pacman -U https://github.com/${{ github.repository }}/releases/download/${{ matrix.app }}-linux-v${{ steps.version.outputs.version }}/${{ steps.package.outputs.file }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Rust cache store
+        uses: actions/cache/save@v4.2.0
+        if: steps.cache_store.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            pake-target/
+          key: ${{ runner.os }}-cargo-pake-${{ steps.pake.outputs.lock_hash }}
