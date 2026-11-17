@@ -128,7 +128,9 @@ jobs:
       - name: Collect package and checksum
         id: package
         run: |
-          shopt -s nullglob
+          # Pake lowercases the app name in Linux package file names
+          # (WhatsAppake1 -> whatsappake1-...), so match case-insensitively.
+          shopt -s nullglob nocaseglob
           files=( "${{ matrix.app }}"-*.pkg.tar.zst )
           if [ "${#files[@]}" -ne 1 ]; then
             echo "::error::Expected exactly one ${{ matrix.app }}-*.pkg.tar.zst, found ${#files[@]}"
